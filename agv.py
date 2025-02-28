@@ -146,8 +146,8 @@ class CameraHandler:
 
 
 class ArUcoDetector:
-    def __init__(self):
-        self.agv_contorller = AGVController("/dev/ttyAMA2", 115200)
+    def __init__(self, agv_controller):
+        self.agv_contorller = agv_controller
         self.camera_matrix = np.load(r"project3_aruco/Image/camera_matrix.npy")
         self.dist_coeffs = np.load(r"project3_aruco/Image/dist_coeffs.npy")
         self.stop_signal = False
@@ -158,13 +158,10 @@ class ArUcoDetector:
         self.skip_frames_limit = 7  # 건너뛸 프레임 수 제한
 
     def detect_markers(self, frame):
-        # 마커 인식 후 건너뛰는 상태 처리
         if self.skip_frames_count > 0:
             self.skip_frames_count -= 1
-            #print(f"Skipping frame: {self.skip_frames_count} remaining")
-            return  # 건너뛰기 중이면 처리하지 않음
+            return
 
-        # 아루코 마커 탐지
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         corners, ids, _ = aruco.detectMarkers(gray, ARUCO_DICT, parameters=ARUCO_PARAMETERS)
         if ids is not None:
@@ -172,34 +169,41 @@ class ArUcoDetector:
                 rvec, tvec, _ = aruco.estimatePoseSingleMarkers(corners[i], 0.07, self.camera_matrix, self.dist_coeffs)
                 distance = np.linalg.norm(tvec)
                 aruco.drawDetectedMarkers(frame, corners)
-   
+                
+                rotation_matrix, _ = cv2.Rodrigues(rvec)  # 회전 벡터를 회전 행렬로 변환
+                yaw_angle = np.arctan2(rotation_matrix[1, 0], rotation_matrix[0, 0]) * 180 / np.pi  # Yaw(수평 회전 각도) 계산
+                
+                print(f"마커 ID: {ids[i][0]}, 거리: {distance:.2f}m, Yaw 각도: {yaw_angle:.2f}")
+
                 if distance <= 0.4:
+                    if abs(yaw_angle) > 5:  # Yaw 각도가 5도 이상 틀어져 있으면 보정
+                        if yaw_angle > 0:
+                            print("오른쪽으로 정렬 중...")
+                            self.agv_contorller.clockwise_rotation(30, 0.5)
+                        else:
+                            print("왼쪽으로 정렬 중...")
+                            self.agv_contorller.counterclockwise_rotation(30, 0.5)
+                    
                     if ids[i][0] in [7, 3, 4, 6]:
                         self.stop_signal = True
                         self.agv_contorller.stop()
                         time.sleep(12.5)
                         self.stop_signal = False
-                    elif ids[i][0] in [2, 11] and not self.destination1_signal:     #2 spare:11
+                    elif ids[i][0] in [2, 11] and not self.destination1_signal:
                         self.destination1_signal = True
                         self.agv_contorller.loading_process()
-                    elif ids[i][0] in [5, 12] and not self.destiantion2_signal:     #5 spare:12
+                    elif ids[i][0] in [5, 12] and not self.destiantion2_signal:
                         self.destiantion2_signal = True
                         self.agv_contorller.unloading_process()
                     elif ids[i][0] in [0] and not self.finish_signal:
                         self.finish_signal = True
                         self.agv_contorller.finish_process()
                     
-
-
-                # 마커 인식 후 프레임 건너뛰기 시작
                 self.skip_frames_count = self.skip_frames_limit
-                #print("ArUco marker detected. Skipping next frames.")
         else:
             self.destination1_signal = False
             self.destiantion2_signal = False
             self.finish_signal = False
-
-
 
 class LineDetector:
     def __init__(self):
